@@ -242,3 +242,4 @@ jobs:
           publish_branch: gh-pages
           keep_files: false  # we restored everything above, so a clean publish is fine
           commit_message: 'daily: report for ${{ github.run_id }}'
+          cname: ${{ vars.MY_DOMAIN }}
