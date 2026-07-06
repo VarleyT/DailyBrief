@@ -1,0 +1,8 @@
+# Python dependencies for DailyBrief
+#
+# Install with: pip install -r requirements.txt
+#
+# curl_cffi — used by scripts/linuxdo-fetch.py to bypass Cloudflare's
+# JA3/JA4 TLS fingerprint check on linux.do. Provides Chrome TLS
+# impersonation without needing a headless browser.
+curl_cffi>=0.7.0

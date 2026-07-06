@@ -190,6 +190,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Python dependencies
+        # curl_cffi provides Chrome TLS fingerprint impersonation for LinuxDo.
+        # ubuntu-latest ships Python 3 and pip; no setup-python step needed.
+        run: pip install curl_cffi
+
       # Bring previous reports into the workspace so they survive each run
       # and so build-site can list them all in the archive.
       - name: Restore existing reports from gh-pages
