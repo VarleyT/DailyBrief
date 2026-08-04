@@ -16,6 +16,11 @@ export interface OpenAICompatConfig {
   baseUrlEnv: string;
 }
 
+type OpenAICompatChatCompletionRequest =
+  OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming & {
+    thinking?: { type: "disabled" };
+  };
+
 export const PRESETS: Record<OpenAICompatConfig["backend"], OpenAICompatConfig> = {
   openai: {
     backend: "openai",
@@ -73,6 +78,32 @@ export function openaiCompatModel(cfg: OpenAICompatConfig): string {
   return process.env.LLM_MODEL?.trim() || cfg.defaultModel;
 }
 
+export function buildChatCompletionRequest(
+  opts: LlmRunOptions,
+  model: string,
+  cfg: OpenAICompatConfig,
+): OpenAICompatChatCompletionRequest {
+  return {
+    model,
+    messages: [
+      { role: "system", content: opts.systemPrompt },
+      { role: "user", content: opts.userPrompt },
+    ],
+    // Explicit max_tokens — most providers default low (DeepSeek 4096,
+    // some MiniMax variants 2048). A 16-item batch enrichment routinely
+    // exceeds 4K output tokens once you count Chinese chars + JSON
+    // structure, and silent truncation made it through with just 1/16
+    // entries parseable. 8192 covers all observed daily batches with
+    // generous headroom. Match the explicit value Anthropic SDK uses.
+    max_tokens: 8192,
+    // DeepSeek V4 enables thinking by default. Digest calls need the final
+    // JSON only, so disable thinking to preserve the output token budget.
+    ...(cfg.backend === "deepseek"
+      ? { thinking: { type: "disabled" as const } }
+      : {}),
+  };
+}
+
 export async function runOpenAICompat(
   opts: LlmRunOptions,
   cfg: OpenAICompatConfig,
@@ -84,23 +115,7 @@ export async function runOpenAICompat(
 
   try {
     const resp = await client.chat.completions.create(
-      {
-        model,
-        messages: [
-          { role: "system", content: opts.systemPrompt },
-          { role: "user", content: opts.userPrompt },
-        ],
-        // Explicit max_tokens — most providers default low (DeepSeek 4096,
-        // some MiniMax variants 2048). A 16-item batch enrichment routinely
-        // exceeds 4K output tokens once you count Chinese chars + JSON
-        // structure, and silent truncation made it through with just 1/16
-        // entries parseable. 8192 covers all observed daily batches with
-        // generous headroom. Match the explicit value Anthropic SDK uses.
-        max_tokens: 8192,
-        // Don't force JSON mode — not all OpenAI-compat providers support
-        // response_format=json_object, and our prompts + jsonrepair already
-        // handle the slop.
-      },
+      buildChatCompletionRequest(opts, model, cfg),
       { timeout: timeoutMs },
     );
     const text = (resp.choices[0]?.message?.content ?? "").trim();
