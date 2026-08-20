@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { LlmIncompleteResponseError } from "../errors";
 import { classifyError, logLlmCall } from "../log";
 import type { LlmRunOptions, LlmRunResult } from "../llm";
 
@@ -96,10 +97,14 @@ export function buildChatCompletionRequest(
     // entries parseable. 8192 covers all observed daily batches with
     // generous headroom. Match the explicit value Anthropic SDK uses.
     max_tokens: 8192,
-    // DeepSeek V4 enables thinking by default. Digest calls need the final
-    // JSON only, so disable thinking to preserve the output token budget.
+    // DeepSeek V4 enables thinking by default. These calls require structured
+    // JSON, so disable thinking to preserve output budget and enable its
+    // native JSON mode to reduce malformed responses.
     ...(cfg.backend === "deepseek"
-      ? { thinking: { type: "disabled" as const } }
+      ? {
+          response_format: { type: "json_object" as const },
+          thinking: { type: "disabled" as const },
+        }
       : {}),
   };
 }
@@ -118,8 +123,36 @@ export async function runOpenAICompat(
       buildChatCompletionRequest(opts, model, cfg),
       { timeout: timeoutMs },
     );
-    const text = (resp.choices[0]?.message?.content ?? "").trim();
+    const choice = resp.choices[0];
+    const text = (choice?.message?.content ?? "").trim();
     const durationMs = Date.now() - started;
+    const finishReason = choice?.finish_reason ?? null;
+    const incompleteReason = !choice
+      ? "response contained no choices"
+      : !text
+        ? "response content was empty"
+        : finishReason && finishReason !== "stop"
+          ? `finish_reason=${finishReason}`
+          : null;
+
+    if (incompleteReason) {
+      const error = new LlmIncompleteResponseError(
+        `${cfg.backend} returned an incomplete response: ${incompleteReason}`,
+      );
+      logLlmCall({
+        ts: new Date(started).toISOString(),
+        backend: cfg.backend,
+        model,
+        durationMs,
+        success: false,
+        inputChars,
+        outputChars: text.length,
+        errorCategory: "other",
+        errorSnippet: error.message,
+      });
+      throw error;
+    }
+
     logLlmCall({
       ts: new Date(started).toISOString(),
       backend: cfg.backend,
@@ -133,6 +166,9 @@ export async function runOpenAICompat(
     });
     return { text, durationMs };
   } catch (err) {
+    // Incomplete responses were logged above with their partial output length.
+    if (err instanceof LlmIncompleteResponseError) throw err;
+
     const durationMs = Date.now() - started;
     const msg = err instanceof Error ? err.message : String(err);
     logLlmCall({
